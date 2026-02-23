@@ -1,0 +1,414 @@
+{
+  "name": "Cloudflare DDNS Updater — Local IP (ipify)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Every 5 Minutes"
+    },
+    {
+      "parameters": {
+        "url": "https://api.ipify.org?format=json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [250, 300],
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Get Public IP"
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nconst currentIp = $input.first().json.ip;\nconst previousIp = staticData.lastKnownIp || null;\n\nconst ipChanged = (previousIp !== null) && (currentIp !== previousIp);\nconst isFirstRun = (previousIp === null);\n\n// Update stored IP to the current one\nstaticData.lastKnownIp = currentIp;\n\nreturn [\n  {\n    json: {\n      currentIp: currentIp,\n      previousIp: previousIp,\n      ipChanged: ipChanged,\n      isFirstRun: isFirstRun\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Compare IPs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-ip-changed-001",
+              "leftValue": "={{ $json.ipChanged }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [750, 300],
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "IP Changed?"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=My public IP address has changed.\n\nOLD IP (the IP currently in DNS records): {{ $json.previousIp }}\nNEW IP (the IP to update records to): {{ $json.currentIp }}\n\nPlease perform the following steps:\n1. List all Cloudflare zones accessible with the provided API token.\n2. For each zone, retrieve all DNS A records.\n3. Identify every A record whose current \"content\" field exactly matches the OLD IP: {{ $json.previousIp }}\n4. Update each matching A record by setting its content to the NEW IP: {{ $json.currentIp }}\n5. Report a summary of all changes made, including zone name, record name, and old/new IP for each updated record.\n\nIMPORTANT: Only update records whose content matches the OLD IP exactly. Do NOT modify any other records.",
+        "options": {
+          "systemMessage": "You are a Cloudflare DNS management assistant. Your job is to update DNS A records when a public IP address changes.\n\nYou have access to the Cloudflare API via an HTTP request tool. The API base URL is https://api.cloudflare.com/client/v4. Authentication is already configured — just make requests.\n\nWorkflow:\n1. GET https://api.cloudflare.com/client/v4/zones to list all zones. Extract the zone id and name from each result in the result array.\n2. For each zone, GET https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A to list all A records. Extract record id, name, content, and zone_id from each.\n3. Filter the A records to find those where the content field matches the OLD IP address exactly.\n4. For each matching record, PATCH https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id} with the JSON body {\"content\": \"NEW_IP\"} to update it to the new IP.\n5. After completing all updates, provide a clear summary of what was changed including zone name, record name, old IP, and new IP for each.\n\nSafety rules:\n- ONLY update A records whose content exactly matches the OLD IP. Never modify records with different IPs.\n- Never delete any records.\n- Never create new records.\n- If no records match the old IP, report that no updates were needed.\n- Always use the zone_id from the list zones response when constructing URLs for DNS record operations.\n\nThe Cloudflare API returns paginated results. The response format is {\"success\": true, \"result\": [...], \"result_info\": {\"page\": 1, \"total_pages\": N}}. If total_pages > 1, make additional requests with ?page=2, ?page=3, etc. appended to the URL.\n\nFor the PATCH request to update a DNS record, send a JSON body with the \"content\" field set to the new IP address.",
+          "maxIterations": 20,
+          "returnIntermediateSteps": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [1050, 300],
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Cloudflare DNS Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-nano"
+        },
+        "options": {
+          "temperature": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [950, 520],
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "List all Cloudflare DNS zones accessible with the configured API token. Returns a JSON response with a 'result' array containing zone objects. Each zone object has an 'id' (the zone_id) and 'name' (the domain name). Use this tool first to discover all zones before listing DNS records.",
+        "url": "https://api.cloudflare.com/client/v4/zones?per_page=50&page={page_number}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "optimizeResponse": true,
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "page_number",
+              "description": "Page number for pagination. Start with 1. Check result_info.total_pages in the response to see if more pages exist.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1100, 520],
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "List Zones",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CF_CREDENTIAL_ID",
+          "name": "Cloudflare API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "List all DNS A records for a specific Cloudflare zone. Returns a JSON response with a 'result' array containing DNS record objects. Each record has 'id' (the record_id), 'name' (e.g. example.com or sub.example.com), 'type' (always 'A' for these results), and 'content' (the IP address). Use the zone_id obtained from the List Zones tool.",
+        "url": "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&per_page=100&page={page_number}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "optimizeResponse": true,
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "zone_id",
+              "description": "The zone ID obtained from the List Zones tool results.",
+              "type": "string"
+            },
+            {
+              "name": "page_number",
+              "description": "Page number for pagination. Start with 1. Check result_info.total_pages in the response to see if more pages exist.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1250, 520],
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "List DNS Records",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CF_CREDENTIAL_ID",
+          "name": "Cloudflare API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toolDescription": "Update a single DNS A record to point to a new IP address. Send a PATCH request with the new IP in the JSON body. Use the zone_id and record_id obtained from the List Zones and List DNS Records tools. Only use this tool for records whose current 'content' (IP address) matches the OLD IP.",
+        "method": "PATCH",
+        "url": "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"content\": \"{new_ip}\"}",
+        "optimizeResponse": true,
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "name": "zone_id",
+              "description": "The zone ID of the zone containing this DNS record.",
+              "type": "string"
+            },
+            {
+              "name": "record_id",
+              "description": "The DNS record ID to update, obtained from List DNS Records results.",
+              "type": "string"
+            },
+            {
+              "name": "new_ip",
+              "description": "The new IP address to set for this DNS A record.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [1400, 520],
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "Update DNS Record",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CF_CREDENTIAL_ID",
+          "name": "Cloudflare API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcc5 Schedule Trigger\nChecks public IP every 5 min.\nNo setup needed.",
+        "width": 200,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-30, 160],
+      "id": "a1b2c3d4-1001-4000-8000-000000000001",
+      "name": "Note: Trigger"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83c\udf10 Get Public IP\nCalls ipify.org for this server's IP.\nNo setup needed.",
+        "width": 200,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [215, 160],
+      "id": "a1b2c3d4-1002-4000-8000-000000000002",
+      "name": "Note: Get IP"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udd04 Compare IPs\nChecks if IP changed since last run.\nNo setup needed.",
+        "width": 200,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [465, 160],
+      "id": "a1b2c3d4-1003-4000-8000-000000000003",
+      "name": "Note: Compare"
+    },
+    {
+      "parameters": {
+        "content": "## \u2753 IP Changed?\nStops here if IP is unchanged.\nNo API calls, no LLM costs.",
+        "width": 200,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [715, 160],
+      "id": "a1b2c3d4-1004-4000-8000-000000000004",
+      "name": "Note: IF"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83e\udd16 AI Agent\nDiscovers all zones & A records,\nupdates those matching old IP.\nNo setup needed.",
+        "width": 220,
+        "height": 110
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1010, 150],
+      "id": "a1b2c3d4-1005-4000-8000-000000000005",
+      "name": "Note: Agent"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udd11 OpenAI API Key Setup\n\n**\u2705 SET UP ON THE \"OpenAI Chat Model\" NODE:**\n\n1. Click the **OpenAI Chat Model** node\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **OpenAI API**\n4. Paste your **OpenAI API key** (starts with `sk-...`)\n5. Save\n\nUsing **gpt-5-nano** (cheapest model with tool calling).\nYou can swap to any other model or LLM provider.\nTemperature is 1 (GPT-5 nano does not support temperature 0).",
+        "width": 350,
+        "height": 290
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-40, 480],
+      "id": "a1b2c3d4-1006-4000-8000-000000000006",
+      "name": "Note: OpenAI"
+    },
+    {
+      "parameters": {
+        "content": "## \u2601\ufe0f Cloudflare API Token Setup\n\n**\u2705 SET UP ON ALL 3 TOOL NODES:**\n(List Zones, List DNS Records, Update DNS Record)\n\n1. Click any of the 3 tool nodes\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **Header Auth**\n4. Fill in the two fields:\n   \u2022 **Name**: type `Authorization`\n   \u2022 **Value**: type `Bearer ` followed by your Cloudflare API token\n     Example: `Bearer cf_abc123xyz...`\n5. Save\n\n(Create it once, then select the same credential on the other two nodes.)\n\n**Creating your Cloudflare API token:**\n\u2192 Go to https://dash.cloudflare.com/profile/api-tokens\n\u2192 Click \"Create Token\"\n\u2192 Use \"Edit zone DNS\" template, or create custom with:\n   \u2022 **Zone : Zone : Read** (to list your domains)\n   \u2022 **Zone : DNS : Edit** (to update DNS records)\n   \u2022 Zone Resources: \"All zones\" (or select specific zones)",
+        "width": 400,
+        "height": 420
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [340, 480],
+      "id": "a1b2c3d4-1007-4000-8000-000000000007",
+      "name": "Note: Cloudflare"
+    },
+    {
+      "parameters": {
+        "content": "# \ud83c\udf0d Cloudflare DDNS Updater \u2014 Local IP (ipify)\n\nAutomatically updates ALL your Cloudflare DNS A records when your n8n server's public IP changes.\nUses an AI agent to **dynamically discover** all zones and records \u2014 no hardcoding of domains needed.\n\n---\n\n### Quick Setup (2 credentials needed)\n\n**1. OpenAI API Key** \u2192 see setup note below the flow\n**2. Cloudflare API Token** \u2192 see setup note below the flow\n\n### How to Test\n\n1. Open the **Compare IPs** Code node\n2. Temporarily change `const previousIp = staticData.lastKnownIp || null;` to `const previousIp = \"1.2.3.4\";`\n3. Execute manually \u2192 AI agent fires, finds no records matching `1.2.3.4`, reports no updates needed\n4. **Revert** the Code node and toggle **Active** for continuous 5-minute monitoring\n\n### Safety\n\n\u2022 Only updates A records matching the **previous** IP\n\u2022 Never creates or deletes records\n\u2022 First run seeds the IP without making changes",
+        "width": 900,
+        "height": 340,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-100, -400],
+      "id": "a1b2c3d4-1000-4000-8000-000000000000",
+      "name": "Note: Overview"
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Public IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Public IP": {
+      "main": [
+        [
+          {
+            "node": "Compare IPs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare IPs": {
+      "main": [
+        [
+          {
+            "node": "IP Changed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IP Changed?": {
+      "main": [
+        [
+          {
+            "node": "Cloudflare DNS Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Cloudflare DNS Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Zones": {
+      "ai_tool": [
+        [
+          {
+            "node": "Cloudflare DNS Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List DNS Records": {
+      "ai_tool": [
+        [
+          {
+            "node": "Cloudflare DNS Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DNS Record": {
+      "ai_tool": [
+        [
+          {
+            "node": "Cloudflare DNS Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  }
+}
