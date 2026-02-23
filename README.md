@@ -14,15 +14,15 @@
 |---------|------|-----------|----------|
 | **Local IP** | `cloudflare-ddns-local.json` | [ipify.org](https://www.ipify.org) | n8n runs locally on the server/network whose IP you want to track |
 | **UniFi Site Manager** | `cloudflare-ddns-unifi.json` | [UniFi Site Manager API](https://developer.ui.com) | Monitor a remote UniFi gateway's WAN IP from anywhere |
+| **SSH Remote IP** | `cloudflare-ddns-ssh.json` | SSH + curl | SSH into a remote device to check its public IP |
+| **Webhook** | `cloudflare-ddns-webhook.json` | Incoming HTTP POST | Remote device pushes its IP to n8n (near-instant updates) |
 
 ## How It Works
 
+All four variants share the same downstream logic — they only differ in how the IP is obtained:
+
 ```
-Schedule Trigger (every 5 min)
-        │
-        ▼
-  Get Public IP ─────────────── ipify.org (local variant)
-  or                            UniFi Site Manager API (UniFi variant)
+  Get IP (varies by variant)
         │
         ▼
    Compare IPs ─────────────── Uses n8n workflow static data
@@ -42,13 +42,17 @@ Schedule Trigger (every 5 min)
               Summary of changes
 ```
 
-**Step by step:**
+**IP source per variant:**
+- **Local** — Schedule Trigger (every 5 min) → ipify.org HTTP request
+- **UniFi** — Schedule Trigger (every 5 min) → UniFi Site Manager API → extract WAN IP by host ID
+- **SSH** — Schedule Trigger (every 5 min) → SSH into remote device → run `curl ipify.org`
+- **Webhook** — Webhook Trigger (on-demand POST) → validate payload → extract IP from body
 
-1. **Schedule Trigger** - Runs every 5 minutes (configurable). The check itself is free/only costs as an n8n execution.
-2. **Get Public IP** - The local variant calls ipify.org. The UniFi variant calls the UniFi Site Manager API and extracts the WAN IP for a specific gateway by host ID.
-3. **Compare IPs** - A Code node using `$getWorkflowStaticData('global')` to persist the last known IP between runs. On the very first run it seeds the IP and takes no action.
-4. **IP Changed?** - An IF node that gates everything downstream. When the IP hasn't changed (the vast majority of runs), the workflow stops here. No Cloudflare API calls, no LLM costs.
-5. **AI Agent** - A LangChain Tools Agent (GPT-5 nano, temperature 1) with three HTTP Request tools that call the Cloudflare API. It lists all zones, lists all A records per zone, identifies records matching the old IP, patches them to the new IP, and reports a summary.
+**Downstream flow (shared by all):**
+
+1. **Compare IPs** - A Code node using `$getWorkflowStaticData('global')` to persist the last known IP between runs. On the very first run it seeds the IP and takes no action.
+2. **IP Changed?** - An IF node that gates everything downstream. When the IP hasn't changed (the vast majority of runs), the workflow stops here. No Cloudflare API calls, no LLM costs.
+3. **AI Agent** - A LangChain Tools Agent (GPT-5 nano, temperature 1) with three HTTP Request tools that call the Cloudflare API. It lists all zones, lists all A records per zone, identifies records matching the old IP, patches them to the new IP, and reports a summary.
 
 ## Prerequisites
 
@@ -59,6 +63,8 @@ Schedule Trigger (every 5 min)
   - Zone Resources: "All zones" (or specific zones)
 - An **OpenAI API key** (or any LLM provider with tool-calling support - see [Using a Different LLM](#using-a-different-llm))
 - _(UniFi variant only)_ A **UniFi Site Manager API key** from [unifi.ui.com](https://unifi.ui.com)
+- _(SSH variant only)_ **SSH access** to a remote device with `curl` installed
+- _(Webhook variant only)_ A **remote device** capable of making HTTP POST requests (any Linux box, router with scripting, etc.)
 
 ## Quick Start
 
@@ -96,9 +102,47 @@ Schedule Trigger (every 5 min)
 7. **Cloudflare credential:** same as local variant step 4
 8. Toggle **Active**
 
+### SSH Remote IP Variant
+
+1. Download `cloudflare-ddns-ssh.json`
+2. In n8n: **Workflows** → **Import from File** → select the JSON
+3. **SSH credential:**
+   - Click the **SSH Remote IP Check** node → Credential dropdown → **Create New Credential** → **SSH**
+   - **Host:** IP address or hostname of the remote device
+   - **Port:** 22 (default)
+   - **Username:** your SSH username
+   - **Authentication:** Password or Private Key
+   - Save
+4. **OpenAI credential:** same as local variant step 3
+5. **Cloudflare credential:** same as local variant step 4
+6. Toggle **Active**
+
+> **Important:** SSH access must work independently of DNS. If the remote device's IP changes and DNS hasn't updated yet, hostname-based SSH will fail. Use a static IP, VPN (e.g. Tailscale, WireGuard), or tunnel as the SSH host.
+
+### Webhook Variant
+
+1. Download `cloudflare-ddns-webhook.json`
+2. In n8n: **Workflows** → **Import from File** → select the JSON
+3. **Webhook authentication:**
+   - Click the **Webhook Trigger** node → Credential dropdown → **Create New Credential** → **Header Auth**
+   - Set a **Name** and **Value** as your shared secret (e.g. Name: `X-Secret`, Value: `my-secret-token-123`)
+   - Save
+4. **OpenAI credential:** same as local variant step 3
+5. **Cloudflare credential:** same as local variant step 4
+6. Toggle **Active** — your webhook URL is now: `https://YOUR_N8N_DOMAIN/webhook/ddns-update`
+7. **Set up the remote device** — add a cron job or script that sends:
+   ```bash
+   curl -X POST https://YOUR_N8N_DOMAIN/webhook/ddns-update \
+     -H "Content-Type: application/json" \
+     -H "X-Secret: my-secret-token-123" \
+     -d '{"ip": "'$(curl -s https://api.ipify.org)'"}'
+   ```
+   For example, as a cron job running every 5 minutes:
+   `*/5 * * * * /path/to/ddns-webhook.sh`
+
 ## Testing
 
-You can test without waiting for a real IP change:
+You can test the schedule-based variants (Local, UniFi, SSH) without waiting for a real IP change:
 
 1. Open the **Compare IPs** Code node
 2. Temporarily change this line:
@@ -112,6 +156,15 @@ You can test without waiting for a real IP change:
 3. Click **Test Workflow** - the AI agent will fire, discover all your zones and A records, find no records matching `1.2.3.4`, and report that no updates were needed. This confirms the full pipeline works end-to-end.
 4. **Revert the change** before activating the workflow for production use.
 
+For the **Webhook variant**, send a test POST with a fake IP instead:
+```bash
+curl -X POST https://YOUR_N8N_DOMAIN/webhook-test/ddns-update \
+  -H "Content-Type: application/json" \
+  -H "X-Secret: my-secret-token-123" \
+  -d '{"ip": "1.2.3.4"}'
+```
+(Use `/webhook-test/` while the workflow execution window is open in n8n.)
+
 > **Note:** n8n's workflow static data (`$getWorkflowStaticData`) only persists when the workflow runs via its trigger (i.e., when active). Manual test executions do not save static data - this is expected n8n behavior, not a bug.
 
 ## Safety
@@ -120,6 +173,7 @@ You can test without waiting for a real IP change:
 - **No create/delete** - The agent is instructed to only update existing records. It will not create new DNS records or delete existing ones.
 - **First-run seed** - On the very first run the workflow stores the current IP as a baseline without making any changes. Updates only begin from the second run onward.
 - **Max iterations** - The agent is capped at 20 tool-calling iterations to prevent runaway API calls.
+- **Webhook authentication** - The webhook variant requires a shared secret header, rejecting unauthorized requests.
 
 ## Cost Estimate
 
@@ -135,11 +189,13 @@ Each AI execution uses approximately 10,000–15,000 input tokens and 1,000–2,
 
 | Parameter | Where | Default | Description |
 |-----------|-------|---------|-------------|
-| Check interval | Schedule Trigger node | 5 minutes | How often to check for IP changes |
+| Check interval | Schedule Trigger node | 5 minutes | How often to check for IP changes (schedule-based variants) |
 | LLM model | OpenAI Chat Model node | `gpt-5-nano` | Which model powers the agent |
 | Temperature | OpenAI Chat Model node | `1` | LLM randomness (lowest permitted by model) |
 | Max iterations | Cloudflare DNS Agent node → Options | `20` | Max tool-calling rounds |
 | Host ID | Extract WAN IP Code node | _(must configure)_ | UniFi variant only |
+| SSH command | SSH Remote IP Check node | `curl -s https://api.ipify.org?format=json` | SSH variant only — command run on remote device |
+| Webhook path | Webhook Trigger node | `ddns-update` | Webhook variant only — the URL path |
 
 ## Using a Different LLM
 
@@ -168,6 +224,12 @@ This is expected when testing with a fake IP like `1.2.3.4`. The agent correctly
 
 **Credential fields appear empty after import**
 n8n never embeds credential values (API keys, tokens) in exported workflow JSON. You must set up credentials manually after importing - see the setup sticky notes inside each workflow.
+
+**SSH variant: remote host must be reachable independently of DNS**
+If the remote device's IP changes and DNS still points to the old IP, hostname-based SSH will fail. Use a static IP address, VPN (Tailscale, WireGuard), or tunnel (Cloudflare Tunnel) as the SSH host in the credential.
+
+**Webhook variant: n8n must be reachable from the remote device**
+The remote device needs to be able to reach your n8n instance's webhook URL. If using HTTPS (recommended), ensure your TLS certificate is valid. The webhook path can be customized in the Webhook Trigger node.
 
 ## License
 
