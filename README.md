@@ -6,7 +6,7 @@
 
 **This solution:** An AI agent dynamically discovers _all_ zones and A records accessible by the Cloudflare API token it is given. Add new domains or subdomains in Cloudflare and they're automatically covered — zero config changes needed.
 
-**Cost:** Despite using an LLM, the AI agent only fires when the IP actually changes (not every check interval). Claude tells me that with the default GPT-5 nano at $0.05/1M input tokens, each execution costs roughly **$0.0015**.
+**Cost:** Despite using an LLM, the AI agent only fires when the IP actually changes (not every check interval). Claude tells me that with the default gpt-4.1-nano at $0.10/1M input tokens, each execution costs roughly **$0.0019**.
 
 ## Workflow Variants
 
@@ -50,9 +50,9 @@ All four variants share the same downstream logic — they only differ in how th
 
 **Downstream flow (shared by all):**
 
-1. **Compare IPs** - A Code node using `$getWorkflowStaticData('global')` to persist the last known IP between runs. On the very first run it seeds the IP and takes no action.
+1. **Compare IPs** - A Code node using `$getWorkflowStaticData('global')` to persist the last known IP between runs. On the very first run it seeds the IP and triggers the agent in audit mode (see Safety below).
 2. **IP Changed?** - An IF node that gates everything downstream. When the IP hasn't changed (the vast majority of runs), the workflow stops here. No Cloudflare API calls, no LLM costs.
-3. **AI Agent** - A LangChain Tools Agent (GPT-5 nano, temperature 1) with three HTTP Request tools that call the Cloudflare API. It lists all zones, lists all A records per zone, identifies records matching the old IP, patches them to the new IP, and reports a summary.
+3. **AI Agent** - A LangChain Tools Agent (gpt-4.1-nano, temperature 0) with three HTTP Request tools that call the Cloudflare API. It lists all zones, lists all A records per zone, identifies records matching the old IP, patches them to the new IP, and reports a summary.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ All four variants share the same downstream logic — they only differ in how th
   - Zone Resources: "All zones" (or specific zones)
 - An **OpenAI API key** (or any LLM provider with tool-calling support - see [Using a Different LLM](#using-a-different-llm))
 - _(UniFi variant only)_ A **UniFi Site Manager API key** from [unifi.ui.com](https://unifi.ui.com)
-- _(SSH variant only)_ **SSH access** to a remote device with `curl` installed
+- _(SSH variant only)_ **SSH access** to a remote device with `curl` installed. **SSH must work independently of DNS** - if the device's IP changes and DNS is stale, hostname-based SSH will fail. Use a static IP, VPN (Tailscale, WireGuard), or persistent tunnel as the SSH host
 - _(Webhook variant only)_ A **remote device** capable of making HTTP POST requests (any Linux box, router with scripting, etc.)
 
 ## Quick Start
@@ -171,31 +171,57 @@ curl -X POST https://YOUR_N8N_DOMAIN/webhook-test/ddns-update \
 
 - **Match-only updates** - Only updates A records whose current content exactly matches the previous known IP. Records intentionally pointing to different IPs are never touched.
 - **No create/delete** - The agent is instructed to only update existing records. It will not create new DNS records or delete existing ones.
-- **First-run seed** - On the very first run the workflow stores the current IP as a baseline without making any changes. Updates only begin from the second run onward.
-- **Max iterations** - The agent is capped at 20 tool-calling iterations to prevent runaway API calls.
+- **First-run audit** - On the very first run the agent lists all zones and A records and reports what it found, but does NOT update anything. This lets you verify the setup is correct before any DNS changes are made. Updates begin from the second run onward.
+- **Max iterations** - The agent is capped at 100 tool-calling iterations to prevent runaway API calls. This is high enough to handle accounts with many zones and records.
 - **Webhook authentication** - The webhook variant requires a shared secret header, rejecting unauthorized requests.
+- **Webhook IP validation** - The webhook variant rejects private/reserved IP addresses (RFC1918, CGNAT, loopback, link-local) to prevent non-public IPs from being written into DNS records.
 
 ## Cost Estimate
 
 | Scenario | IP Changes / Month | Est. Cost / Month |
 |----------|-------------------|-------------------|
 | Stable residential IP | 2–4 | < $0.01 |
-| Frequent dynamic IP | ~30 | ~$0.05 |
-| Very unstable | ~100 | ~$0.15 |
+| Frequent dynamic IP | ~30 | ~$0.06 |
+| Very unstable | ~100 | ~$0.19 |
 
-Each AI execution uses approximately 10,000–15,000 input tokens and 1,000–2,000 output tokens with GPT-5 nano ($0.05/$0.40 per 1M tokens). The 5-minute schedule checks that don't trigger the AI cost nothing.
+Each AI execution uses approximately 10,000–15,000 input tokens and 1,000–2,000 output tokens with gpt-4.1-nano ($0.10/$0.40 per 1M tokens). The 5-minute schedule checks that don't trigger the AI cost nothing.
 
 ## Configuration
 
 | Parameter | Where | Default | Description |
 |-----------|-------|---------|-------------|
 | Check interval | Schedule Trigger node | 5 minutes | How often to check for IP changes (schedule-based variants) |
-| LLM model | OpenAI Chat Model node | `gpt-5-nano` | Which model powers the agent |
-| Temperature | OpenAI Chat Model node | `1` | LLM randomness (lowest permitted by model) |
-| Max iterations | Cloudflare DNS Agent node → Options | `20` | Max tool-calling rounds |
+| LLM model | OpenAI Chat Model node | `gpt-4.1-nano` | Which model powers the agent |
+| Temperature | OpenAI Chat Model node | `0` | LLM randomness (0 = deterministic) |
+| Max iterations | Cloudflare DNS Agent node → Options | `100` | Max tool-calling rounds |
 | Host ID | Extract WAN IP Code node | _(must configure)_ | UniFi variant only |
 | SSH command | SSH Remote IP Check node | `curl -s https://api.ipify.org?format=json` | SSH variant only — command run on remote device |
 | Webhook path | Webhook Trigger node | `ddns-update` | Webhook variant only — the URL path |
+
+## Agent System Prompt
+
+The AI agent's behaviour is governed by the following system prompt (identical across all four variants). This is reproduced here so you can audit the safety boundaries without importing the JSON:
+
+> You are a Cloudflare DNS management assistant. Your job is to update DNS A records when a public IP address changes.
+>
+> You have access to the Cloudflare API via an HTTP request tool. The API base URL is `https://api.cloudflare.com/client/v4`. Authentication is already configured — just make requests.
+>
+> **Workflow:**
+> 1. GET `/zones` to list all zones. Extract the zone id and name from each result.
+> 2. For each zone, GET `/zones/{zone_id}/dns_records?type=A` to list all A records. Extract record id, name, content, and zone_id.
+> 3. Filter the A records to find those where the content field matches the OLD IP address exactly.
+> 4. For each matching record, PATCH `/zones/{zone_id}/dns_records/{record_id}` with `{"content": "NEW_IP"}`.
+> 5. After completing all updates, provide a clear summary of what was changed.
+>
+> **Safety rules:**
+> - ONLY update A records whose content exactly matches the OLD IP. Never modify records with different IPs.
+> - Never delete any records.
+> - Never create new records.
+> - If no records match the old IP, report that no updates were needed.
+>
+> The Cloudflare API returns paginated results. If `total_pages > 1`, make additional requests with `?page=2`, `?page=3`, etc.
+
+On the first run, the agent receives an audit-only prompt instead: it lists all zones and A records, flags any that don't match the current IP, but makes no changes.
 
 ## Using a Different LLM
 
@@ -225,11 +251,14 @@ This is expected when testing with a fake IP like `1.2.3.4`. The agent correctly
 **Credential fields appear empty after import**
 n8n never embeds credential values (API keys, tokens) in exported workflow JSON. You must set up credentials manually after importing - see the setup sticky notes inside each workflow.
 
-**SSH variant: remote host must be reachable independently of DNS**
-If the remote device's IP changes and DNS still points to the old IP, hostname-based SSH will fail. Use a static IP address, VPN (Tailscale, WireGuard), or tunnel (Cloudflare Tunnel) as the SSH host in the credential.
+**SSH variant: DNS-independent access required**
+See Prerequisites above. The SSH host must be reachable without relying on the DNS records this workflow updates.
 
 **Webhook variant: n8n must be reachable from the remote device**
 The remote device needs to be able to reach your n8n instance's webhook URL. If using HTTPS (recommended), ensure your TLS certificate is valid. The webhook path can be customized in the Webhook Trigger node.
+
+**No IPv6 (AAAA) record support**
+Only A records (IPv4) are targeted. AAAA records for IPv6 are not currently updated. This could be added by including `type=AAAA` in the DNS record queries and extending the agent's instructions.
 
 ## License
 
