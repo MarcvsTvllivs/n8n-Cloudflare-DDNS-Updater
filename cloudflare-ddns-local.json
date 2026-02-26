@@ -31,7 +31,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nconst currentIp = $input.first().json.ip;\nconst previousIp = staticData.lastKnownIp || null;\n\nconst ipChanged = (previousIp === null) || (currentIp !== previousIp);\nconst isFirstRun = (previousIp === null);\n\n// Update stored IP to the current one\nstaticData.lastKnownIp = currentIp;\n\nreturn [\n  {\n    json: {\n      currentIp: currentIp,\n      previousIp: previousIp,\n      ipChanged: ipChanged,\n      isFirstRun: isFirstRun\n    }\n  }\n];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nconst currentIp = $input.first().json.ip;\nconst previousIp = staticData.lastKnownIp || null;\n\nconst ipChanged = (previousIp === null) || (currentIp !== previousIp);\nconst isFirstRun = (previousIp === null);\n\n// State is written by the Store IP node after the agent completes successfully\n\nreturn [\n  {\n    json: {\n      currentIp: currentIp,\n      previousIp: previousIp,\n      ipChanged: ipChanged,\n      isFirstRun: isFirstRun\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -93,7 +93,8 @@
           "value": "gpt-4.1-nano"
         },
         "options": {
-          "temperature": 0
+          "temperature": 0,
+          "parallelToolCalls": false
         }
       },
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
@@ -276,6 +277,28 @@
     },
     {
       "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.lastKnownIp = $('Compare IPs').first().json.currentIp;\nreturn [{ json: { success: true, storedIp: $('Compare IPs').first().json.currentIp } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300],
+      "id": "a1b2c3d4-0015-4000-8000-000000000015",
+      "name": "Store IP"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcbe Store IP\nSaves current IP after successful update.\nRetries on next run if agent fails.",
+        "width": 210,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1260, 160],
+      "id": "a1b2c3d4-1015-4000-8000-000000000015",
+      "name": "Note: Store IP"
+    },
+    {
+      "parameters": {
         "content": "## \ud83d\udd11 OpenAI API Key Setup\n\n**\u2705 SET UP ON THE \"OpenAI Chat Model\" NODE:**\n\n1. Click the **OpenAI Chat Model** node\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **OpenAI API**\n4. Paste your **OpenAI API key** (starts with `sk-...`)\n5. Save\n\nUsing **gpt-4.1-nano** (optimised for tool calling, no reasoning overhead).\nYou can swap to any other model or LLM provider.\nTemperature is 0 for deterministic output.",
         "width": 350,
         "height": 290
@@ -340,6 +363,17 @@
         [
           {
             "node": "IP Changed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cloudflare DNS Agent": {
+      "main": [
+        [
+          {
+            "node": "Store IP",
             "type": "main",
             "index": 0
           }

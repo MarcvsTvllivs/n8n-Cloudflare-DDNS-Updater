@@ -171,7 +171,8 @@ curl -X POST https://YOUR_N8N_DOMAIN/webhook-test/ddns-update \
 
 - **Match-only updates** - Only updates A records whose current content exactly matches the previous known IP. Records intentionally pointing to different IPs are never touched.
 - **No create/delete** - The agent is instructed to only update existing records. It will not create new DNS records or delete existing ones.
-- **First-run audit** - On the very first run the agent lists all zones and A records and reports what it found, but does NOT update anything. This lets you verify the setup is correct before any DNS changes are made. Updates begin from the second run onward.
+- **First-run audit** - On the very first run the agent lists all zones and A records and reports what it found, but does NOT update anything. This lets you verify the setup is correct before any DNS changes are made. Updates begin from the second run onward. If the audit reveals stale records, use the [Testing](#testing) procedure (set `previousIp` to the stale IP) to trigger a one-off fix.
+- **State after success only** - The last known IP is only persisted after the agent completes successfully. If the agent fails (API error, timeout, n8n crash), the next run retries the same update automatically.
 - **Max iterations** - The agent is capped at 100 tool-calling iterations to prevent runaway API calls. This is high enough to handle accounts with many zones and records.
 - **Webhook authentication** - The webhook variant requires a shared secret header, rejecting unauthorized requests.
 - **Webhook IP validation** - The webhook variant rejects private/reserved IP addresses (RFC1918, CGNAT, loopback, link-local) to prevent non-public IPs from being written into DNS records.

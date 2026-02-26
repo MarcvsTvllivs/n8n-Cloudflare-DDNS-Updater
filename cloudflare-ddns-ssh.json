@@ -47,7 +47,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nconst currentIp = $input.first().json.ip;\nconst previousIp = staticData.lastKnownIp || null;\n\nconst ipChanged = (previousIp === null) || (currentIp !== previousIp);\nconst isFirstRun = (previousIp === null);\n\n// Update stored IP to the current one\nstaticData.lastKnownIp = currentIp;\n\nreturn [\n  {\n    json: {\n      currentIp: currentIp,\n      previousIp: previousIp,\n      ipChanged: ipChanged,\n      isFirstRun: isFirstRun\n    }\n  }\n];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nconst currentIp = $input.first().json.ip;\nconst previousIp = staticData.lastKnownIp || null;\n\nconst ipChanged = (previousIp === null) || (currentIp !== previousIp);\nconst isFirstRun = (previousIp === null);\n\n// State is written by the Store IP node after the agent completes successfully\n\nreturn [\n  {\n    json: {\n      currentIp: currentIp,\n      previousIp: previousIp,\n      ipChanged: ipChanged,\n      isFirstRun: isFirstRun\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -109,7 +109,8 @@
           "value": "gpt-4.1-nano"
         },
         "options": {
-          "temperature": 0
+          "temperature": 0,
+          "parallelToolCalls": false
         }
       },
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
@@ -304,6 +305,28 @@
     },
     {
       "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.lastKnownIp = $('Compare IPs').first().json.currentIp;\nreturn [{ json: { success: true, storedIp: $('Compare IPs').first().json.currentIp } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1550, 300],
+      "id": "a1b2c3d4-0015-4000-8000-000000000015",
+      "name": "Store IP"
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcbe Store IP\nSaves current IP after successful update.\nRetries on next run if agent fails.",
+        "width": 210,
+        "height": 100
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1510, 160],
+      "id": "a1b2c3d4-1015-4000-8000-000000000015",
+      "name": "Note: Store IP"
+    },
+    {
+      "parameters": {
         "content": "## \ud83d\udd10 SSH Credential Setup\n\n**\u2705 SET UP ON THE \"SSH Remote IP Check\" NODE:**\n\n1. Click the **SSH Remote IP Check** node\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **SSH**\n4. Fill in the fields:\n   \u2022 **Host**: IP address or hostname of the remote device\n   \u2022 **Port**: 22 (default)\n   \u2022 **Username**: your SSH username\n   \u2022 **Authentication**: Password or Private Key\n5. Save\n\n**\u26a0\ufe0f Important:**\nThe remote device must have `curl` installed.\nSSH access must work **independently of DNS**\n(use an IP address, VPN, or tunnel as the host).",
         "width": 350,
         "height": 380
@@ -407,6 +430,17 @@
           }
         ],
         []
+      ]
+    },
+    "Cloudflare DNS Agent": {
+      "main": [
+        [
+          {
+            "node": "Store IP",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "OpenAI Chat Model": {
