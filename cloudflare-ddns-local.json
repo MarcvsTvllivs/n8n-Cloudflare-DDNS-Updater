@@ -90,7 +90,7 @@
         "model": {
           "__rl": true,
           "mode": "list",
-          "value": "gpt-4.1-nano"
+          "value": "gpt-5.4-nano"
         },
         "options": {
           "temperature": 0,
@@ -299,7 +299,7 @@
     },
     {
       "parameters": {
-        "content": "## \ud83d\udd11 OpenAI API Key Setup\n\n**\u2705 SET UP ON THE \"OpenAI Chat Model\" NODE:**\n\n1. Click the **OpenAI Chat Model** node\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **OpenAI API**\n4. Paste your **OpenAI API key** (starts with `sk-...`)\n5. Save\n\nUsing **gpt-4.1-nano** (optimised for tool calling, no reasoning overhead).\nYou can swap to any other model or LLM provider.\nTemperature is 0 for deterministic output.",
+        "content": "## \ud83d\udd11 OpenAI API Key Setup\n\n**\u2705 SET UP ON THE \"OpenAI Chat Model\" NODE:**\n\n1. Click the **OpenAI Chat Model** node\n2. Under \"Credential to connect with\", click the dropdown\n3. Select \"Create New Credential\" \u2192 **OpenAI API**\n4. Paste your **OpenAI API key** (starts with `sk-...`)\n5. Save\n\nUsing **gpt-5.4-nano** (low-cost model with tool-calling support).\nYou can swap to any other model or LLM provider.\nTemperature is 0 for deterministic output.",
         "width": 350,
         "height": 290
       },

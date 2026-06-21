@@ -1,12 +1,12 @@
 # n8n-Cloudflare-DDNS-Updater
 
-**TL;DR**: [n8n](https://n8n.io) Workflows for AI agent-aided IP updaters for [Cloudflare](https://cloudflare.com) DDNS. The issue I am trying to solve is that existing updaters tend to just update specific record/subdomains that are manually set, not all records/subdomains in a Cloudflare Zone. With these Workflows, a lightweight AI agent determines and updates all.
+**TL;DR**: [n8n](https://n8n.io) workflows for [Cloudflare](https://cloudflare.com) DDNS that discover and update all eligible A records when your public IP changes.
 
-**The problem:** Traditional DDNS tools (ddclient, cloudflare-ddns scripts, the Home Assistant Cloudflare integration, the DDNS updater in UniFi Network etc.) require you to hardcode every domain and subdomain you want updated. Add a new subdomain in Cloudflare? You have to remember to update your DDNS config too (and in some cases like the HA integration completely wipe your setup and start over).
+**The problem:** Traditional DDNS tools usually require a fixed list of domains or subdomains. Add a new A record later and you must remember to update the DDNS configuration too.
 
-**This solution:** An AI agent dynamically discovers _all_ zones and A records accessible by the Cloudflare API token it is given. Add new domains or subdomains in Cloudflare and they're automatically covered — zero config changes needed.
+**This solution:** A lightweight tool-calling agent lists the Cloudflare zones and A records available to your API token, finds records that still point to the previous IP, and patches only those records to the new IP.
 
-**Cost:** Despite using an LLM, the AI agent only fires when the IP actually changes (not every check interval). Claude tells me that with the default gpt-4.1-nano at $0.10/1M input tokens, each execution costs roughly **$0.0019**.
+**Cost:** The agent only runs when the IP changes, not on every scheduled check. With the default `gpt-5.4-nano` model, a typical execution is estimated at **about $0.0033–$0.0055** using current OpenAI pricing.
 
 ## Workflow Variants
 
@@ -52,7 +52,7 @@ All four variants share the same downstream logic — they only differ in how th
 
 1. **Compare IPs** - A Code node using `$getWorkflowStaticData('global')` to persist the last known IP between runs. On the very first run it seeds the IP and triggers the agent in audit mode (see Safety below).
 2. **IP Changed?** - An IF node that gates everything downstream. When the IP hasn't changed (the vast majority of runs), the workflow stops here. No Cloudflare API calls, no LLM costs.
-3. **AI Agent** - A LangChain Tools Agent (gpt-4.1-nano, temperature 0) with three HTTP Request tools that call the Cloudflare API. It lists all zones, lists all A records per zone, identifies records matching the old IP, patches them to the new IP, and reports a summary.
+3. **AI Agent** - A LangChain Tools Agent (`gpt-5.4-nano`, temperature 0) uses three HTTP Request tools to call the Cloudflare API. It lists zones, lists A records, patches records whose content exactly matches the old IP, and reports a summary.
 
 ## Prerequisites
 
@@ -125,7 +125,7 @@ All four variants share the same downstream logic — they only differ in how th
 2. In n8n: **Workflows** → **Import from File** → select the JSON
 3. **Webhook authentication:**
    - Click the **Webhook Trigger** node → Credential dropdown → **Create New Credential** → **Header Auth**
-   - Set a **Name** and **Value** as your shared secret (e.g. Name: `X-Secret`, Value: `my-secret-token-123`)
+   - Set a **Name** and **Value** as your shared secret (e.g. Name: `X-Secret`, Value: a random secret from `openssl rand -base64 32`)
    - Save
 4. **OpenAI credential:** same as local variant step 3
 5. **Cloudflare credential:** same as local variant step 4
@@ -134,7 +134,7 @@ All four variants share the same downstream logic — they only differ in how th
    ```bash
    curl -X POST https://YOUR_N8N_DOMAIN/webhook/ddns-update \
      -H "Content-Type: application/json" \
-     -H "X-Secret: my-secret-token-123" \
+     -H "X-Secret: YOUR_WEBHOOK_SECRET" \
      -d '{"ip": "'$(curl -s https://api.ipify.org)'"}'
    ```
    For example, as a cron job running every 5 minutes:
@@ -160,7 +160,7 @@ For the **Webhook variant**, send a test POST with a fake IP instead:
 ```bash
 curl -X POST https://YOUR_N8N_DOMAIN/webhook-test/ddns-update \
   -H "Content-Type: application/json" \
-  -H "X-Secret: my-secret-token-123" \
+  -H "X-Secret: YOUR_WEBHOOK_SECRET" \
   -d '{"ip": "1.2.3.4"}'
 ```
 (Use `/webhook-test/` while the workflow execution window is open in n8n.)
@@ -181,18 +181,18 @@ curl -X POST https://YOUR_N8N_DOMAIN/webhook-test/ddns-update \
 
 | Scenario | IP Changes / Month | Est. Cost / Month |
 |----------|-------------------|-------------------|
-| Stable residential IP | 2–4 | < $0.01 |
-| Frequent dynamic IP | ~30 | ~$0.06 |
-| Very unstable | ~100 | ~$0.19 |
+| Stable residential IP | 2–4 | ~$0.01–$0.03 |
+| Frequent dynamic IP | ~30 | ~$0.10–$0.17 |
+| Very unstable | ~100 | ~$0.33–$0.55 |
 
-Each AI execution uses approximately 10,000–15,000 input tokens and 1,000–2,000 output tokens with gpt-4.1-nano ($0.10/$0.40 per 1M tokens). The 5-minute schedule checks that don't trigger the AI cost nothing.
+Estimate assumes each agent execution uses approximately 10,000–15,000 input tokens and 1,000–2,000 output tokens with `gpt-5.4-nano`. Current OpenAI pricing is $0.20 / 1M input tokens and $1.25 / 1M output tokens, so a typical run costs about $0.0033–$0.0055. The 5-minute schedule checks that don't trigger the agent do not incur LLM cost.
 
 ## Configuration
 
 | Parameter | Where | Default | Description |
 |-----------|-------|---------|-------------|
 | Check interval | Schedule Trigger node | 5 minutes | How often to check for IP changes (schedule-based variants) |
-| LLM model | OpenAI Chat Model node | `gpt-4.1-nano` | Which model powers the agent |
+| LLM model | OpenAI Chat Model node | `gpt-5.4-nano` | Which model powers the agent |
 | Temperature | OpenAI Chat Model node | `0` | LLM randomness (0 = deterministic) |
 | Max iterations | Cloudflare DNS Agent node → Options | `100` | Max tool-calling rounds |
 | Host ID | Extract WAN IP Code node | _(must configure)_ | UniFi variant only |
